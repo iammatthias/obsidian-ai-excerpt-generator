@@ -1,0 +1,49 @@
+name: Release Obsidian plugin
+
+on:
+    push:
+        tags:
+            - "*"
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v3
+
+            - name: Use Node.js
+              uses: actions/setup-node@v3
+              with:
+                  node-version: "18.x"
+
+            - name: Build plugin
+              run: |
+                  npm install
+                  npm run build
+
+            - name: Create release
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  tag="${GITHUB_REF#refs/tags/}"
+
+                  # Create a ZIP file with all required files
+                  mkdir -p release
+                  cp dist/main.js dist/manifest.json dist/styles.css release/
+
+                  # Copy prompt templates if they exist - using recursive copy
+                  if [ -d "dist/prompts" ]; then
+                    cp -r dist/prompts release/
+                  fi
+
+                  cd release
+                  zip -r release.zip .
+                  cd ..
+
+                  # Create GitHub release with the ZIP file
+                  gh release create "$tag" \
+                    --title="$tag" \
+                    --draft \
+                    release/release.zip
