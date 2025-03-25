@@ -29,21 +29,18 @@ jobs:
               run: |
                   tag="${GITHUB_REF#refs/tags/}"
 
-                  # Create a ZIP file with all required files
-                  mkdir -p release
-                  cp dist/main.js dist/manifest.json dist/styles.css release/
+                  # Package the plugin files directly from dist
+                  cd dist
+                  zip -r ../release.zip main.js manifest.json styles.css
 
-                  # Copy prompt templates if they exist - using recursive copy
-                  if [ -d "dist/prompts" ]; then
-                    cp -r dist/prompts release/
+                  # Add prompts directory if it exists
+                  if [ -d "prompts" ]; then
+                    zip -r ../release.zip prompts
                   fi
-
-                  cd release
-                  zip -r release.zip .
                   cd ..
 
                   # Create GitHub release with the ZIP file
                   gh release create "$tag" \
                     --title="$tag" \
                     --draft \
-                    release/release.zip
+                    release.zip
