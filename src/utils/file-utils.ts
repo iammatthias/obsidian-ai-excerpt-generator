@@ -98,11 +98,38 @@ export class FileUtils {
 	static escapeExcerpt(excerpt: string): string {
 		if (!excerpt) return "";
 
-		// Escape double quotes and other problematic characters
-		return excerpt
-			.replace(/"/g, '\\"') // Double quotes need escaping
+		// Trim and sanitize excerpt first
+		let sanitized = excerpt.trim();
+
+		// Check for special characters that would require quoting in YAML
+		const needsQuotes =
+			/[:#\[\]{}&*!|>'"%@`]/g.test(sanitized) ||
+			sanitized.includes("\n") ||
+			sanitized.startsWith(" ") ||
+			sanitized.endsWith(" ") ||
+			sanitized === "true" ||
+			sanitized === "false" ||
+			sanitized === "yes" ||
+			sanitized === "no" ||
+			sanitized === "null" ||
+			/^[-+]?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$/.test(sanitized);
+
+		// Replace all problematic characters
+		sanitized = sanitized
+			.replace(/\\/g, "\\\\") // Escape backslashes first!
+			.replace(/"/g, '\\"') // Escape double quotes
 			.replace(/\n/g, " ") // Replace newlines with spaces
-			.trim();
+			.replace(/\r/g, " ") // Replace carriage returns with spaces
+			.replace(/\t/g, " ") // Replace tabs with spaces
+			.replace(/\f/g, " ") // Replace form feeds
+			.replace(/:/g, "\\:") // Escape colons (problematic in YAML)
+			.replace(/\u0000/g, "") // Remove null bytes
+			.replace(/[\u007F-\u009F]/g, "") // Remove control characters
+			.replace(/[\u2028\u2029]/g, " "); // Replace line/paragraph separators with spaces
+
+		// Prepare the final YAML safe excerpt
+		// Always use double quotes for consistency and safer escaping
+		return `"${sanitized}"`;
 	}
 
 	/**
@@ -117,7 +144,7 @@ export class FileUtils {
 		if (!excerpt) return content;
 
 		const escapedExcerpt = this.escapeExcerpt(excerpt);
-		return `---\nexcerpt: "${escapedExcerpt}"\n---\n\n${content}`;
+		return `---\nexcerpt: ${escapedExcerpt}\n---\n\n${content}`;
 	}
 
 	/**
@@ -144,11 +171,11 @@ export class FileUtils {
 			// Replace existing excerpt
 			newFrontmatter = frontmatter.replace(
 				this.EXCERPT_REGEX,
-				`excerpt: "${escapedExcerpt}"`
+				`excerpt: ${escapedExcerpt}`
 			);
 		} else {
 			// Add excerpt to existing frontmatter
-			newFrontmatter = frontmatter + `\nexcerpt: "${escapedExcerpt}"`;
+			newFrontmatter = frontmatter + `\nexcerpt: ${escapedExcerpt}`;
 		}
 
 		// Replace old frontmatter with new one

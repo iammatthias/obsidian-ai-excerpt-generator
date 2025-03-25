@@ -12,8 +12,74 @@ export class ProviderFactory {
 	// Track failed provider attempts to implement cooldown periods
 	private static providerCooldowns: Record<string, number> = {};
 	private static cooldownDuration: number = 60000; // 1 minute cooldown after failures
-	private static activeProviders: Map<string, AIExcerptProvider> = new Map();
+	private static activeProviders: Map<
+		string,
+		{
+			provider: AIExcerptProvider;
+			lastUsed: number;
+			id: string;
+		}
+	> = new Map();
 	private static maxActiveProviders: number = 2; // Maximum concurrent provider instances
+	private static cleanupInterval: NodeJS.Timeout | null = null;
+	private static maxProviderIdleTime: number = 5 * 60 * 1000; // 5 minutes before cleanup
+
+	/**
+	 * Initialize the provider management system with automatic cleanup
+	 */
+	static initialize(): void {
+		// Set up automatic provider cleanup every minute
+		if (!this.cleanupInterval) {
+			this.cleanupInterval = setInterval(() => {
+				this.cleanupIdleProviders();
+			}, 60000); // Check every minute
+		}
+	}
+
+	/**
+	 * Clean up provider management when plugin is unloaded
+	 */
+	static shutdown(): void {
+		if (this.cleanupInterval) {
+			clearInterval(this.cleanupInterval);
+			this.cleanupInterval = null;
+		}
+
+		// Release all providers
+		for (const [id, providerData] of this.activeProviders.entries()) {
+			this.activeProviders.delete(id);
+			console.log(`Released provider ${id} during shutdown`);
+		}
+
+		// Clear all cooldowns
+		this.providerCooldowns = {};
+	}
+
+	/**
+	 * Remove idle providers that haven't been used recently
+	 */
+	private static cleanupIdleProviders(): void {
+		const now = Date.now();
+		const expiredIds: string[] = [];
+
+		// Find providers that have been idle too long
+		for (const [id, providerData] of this.activeProviders.entries()) {
+			const idleTime = now - providerData.lastUsed;
+			if (idleTime > this.maxProviderIdleTime) {
+				expiredIds.push(id);
+			}
+		}
+
+		// Clean up expired providers
+		for (const id of expiredIds) {
+			this.activeProviders.delete(id);
+			console.log(
+				`Auto-released idle provider ${id} after ${
+					this.maxProviderIdleTime / 1000
+				} seconds`
+			);
+		}
+	}
 
 	/**
 	 * Check if a provider is in cooldown period after repeated failures
@@ -74,7 +140,7 @@ export class ProviderFactory {
 		// Check if we already have too many active providers
 		if (this.activeProviders.size >= this.maxActiveProviders) {
 			console.warn(
-				`Maximum number of active providers (${this.maxActiveProviders}) reached. Waiting for an available provider.`
+				`Maximum number of active providers (${this.maxActiveProviders}) reached. Reusing an existing provider.`
 			);
 			// Instead of creating a new instance, return an existing one to limit concurrent requests
 			const existingProvider = this.getExistingProvider(
@@ -83,6 +149,9 @@ export class ProviderFactory {
 			if (existingProvider) {
 				return existingProvider;
 			}
+
+			// If no provider of requested type is available, clean up the oldest one
+			this.cleanupOldestProvider();
 		}
 
 		// Generate a unique ID for the provider instance
@@ -106,7 +175,11 @@ export class ProviderFactory {
 				);
 
 				// Store the provider for reuse
-				this.activeProviders.set(providerId, claudeProvider);
+				this.activeProviders.set(providerId, {
+					provider: claudeProvider,
+					lastUsed: Date.now(),
+					id: providerId,
+				});
 				return claudeProvider;
 
 			case LLMProvider.OPENAI:
@@ -125,12 +198,43 @@ export class ProviderFactory {
 				);
 
 				// Store the provider for reuse
-				this.activeProviders.set(providerId, openaiProvider);
+				this.activeProviders.set(providerId, {
+					provider: openaiProvider,
+					lastUsed: Date.now(),
+					id: providerId,
+				});
 				return openaiProvider;
 
 			default:
 				console.error(`Unknown provider: ${settings.provider}`);
 				return null;
+		}
+	}
+
+	/**
+	 * Clean up the oldest provider to make room for new ones
+	 * @private
+	 */
+	private static cleanupOldestProvider(): void {
+		if (this.activeProviders.size === 0) return;
+
+		let oldestId: string | null = null;
+		let oldestTime = Infinity;
+
+		// Find the oldest provider
+		for (const [id, providerData] of this.activeProviders.entries()) {
+			if (providerData.lastUsed < oldestTime) {
+				oldestTime = providerData.lastUsed;
+				oldestId = id;
+			}
+		}
+
+		// Remove the oldest provider
+		if (oldestId) {
+			this.activeProviders.delete(oldestId);
+			console.log(
+				`Released oldest provider ${oldestId} to make room for new provider`
+			);
 		}
 	}
 
@@ -141,13 +245,16 @@ export class ProviderFactory {
 	private static getExistingProvider(
 		providerType: LLMProvider
 	): AIExcerptProvider | null {
-		for (const [id, provider] of this.activeProviders.entries()) {
+		for (const [id, providerData] of this.activeProviders.entries()) {
+			const provider = providerData.provider;
 			if (
 				(providerType === LLMProvider.CLAUDE &&
 					provider instanceof ClaudeProvider) ||
 				(providerType === LLMProvider.OPENAI &&
 					provider instanceof OpenAIProvider)
 			) {
+				// Update last used timestamp
+				providerData.lastUsed = Date.now();
 				return provider;
 			}
 		}
@@ -195,7 +302,9 @@ export class ProviderFactory {
 				console.log(
 					`Falling back to OpenAI provider due to Claude API issues`
 				);
-				const providerId = `${LLMProvider.OPENAI}-${Date.now()}`;
+				const providerId = `${
+					LLMProvider.OPENAI
+				}-fallback-${Date.now()}`;
 				const openaiProvider = new OpenAIProvider(
 					settings.openaiApiKey,
 					settings.openaiModel,
@@ -203,7 +312,11 @@ export class ProviderFactory {
 				);
 
 				// Store the provider for reuse
-				this.activeProviders.set(providerId, openaiProvider);
+				this.activeProviders.set(providerId, {
+					provider: openaiProvider,
+					lastUsed: Date.now(),
+					id: providerId,
+				});
 				result.provider = openaiProvider;
 			} else {
 				console.log(
@@ -229,7 +342,9 @@ export class ProviderFactory {
 				console.log(
 					`Falling back to Claude provider due to OpenAI API issues`
 				);
-				const providerId = `${LLMProvider.CLAUDE}-${Date.now()}`;
+				const providerId = `${
+					LLMProvider.CLAUDE
+				}-fallback-${Date.now()}`;
 				const claudeProvider = new ClaudeProvider(
 					settings.claudeApiKey,
 					settings.claudeModel,
@@ -238,7 +353,11 @@ export class ProviderFactory {
 				);
 
 				// Store the provider for reuse
-				this.activeProviders.set(providerId, claudeProvider);
+				this.activeProviders.set(providerId, {
+					provider: claudeProvider,
+					lastUsed: Date.now(),
+					id: providerId,
+				});
 				result.provider = claudeProvider;
 			} else {
 				console.log(
@@ -252,27 +371,29 @@ export class ProviderFactory {
 	}
 
 	/**
-	 * Report a provider failure to potentially trigger cooldown
-	 * Call this when a provider has failed multiple times to trigger fallback
+	 * Reports a provider failure to implement cooldown mechanism
 	 *
 	 * @param provider - The provider type that failed
 	 */
 	static reportProviderFailure(provider: LLMProvider): void {
+		// Put the provider in cooldown after failure
 		this.setProviderCooldown(provider);
 	}
 
 	/**
-	 * Clean up and remove a provider instance after use
-	 * This helps manage resources and provider pools
+	 * Releases a provider instance when it's no longer needed
+	 * This doesn't destroy the provider but marks it as available for reuse
 	 *
 	 * @param provider - The provider instance to release
 	 */
 	static releaseProvider(provider: AIExcerptProvider): void {
-		for (const [id, existingProvider] of this.activeProviders.entries()) {
-			if (existingProvider === provider) {
-				this.activeProviders.delete(id);
-				console.log(`Released provider instance ${id}`);
-				break;
+		// Find the provider in our active providers map
+		for (const [id, providerData] of this.activeProviders.entries()) {
+			if (providerData.provider === provider) {
+				// Instead of removing, update last used time to show it's available
+				providerData.lastUsed = Date.now();
+				console.log(`Provider ${id} marked as available for reuse`);
+				return;
 			}
 		}
 	}

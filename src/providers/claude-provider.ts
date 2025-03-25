@@ -59,13 +59,6 @@ export class ClaudeProvider implements AIExcerptProvider {
 	 */
 	async generateExcerpt(content: string, maxLength: number): Promise<string> {
 		try {
-			// Prepare user prompt with instructions and content
-			const userPrompt =
-				`Generate a concise excerpt (maximum ${maxLength} characters) that captures the essence of this document. ` +
-				`Focus on the main points and be extremely concise. ` +
-				`The excerpt will be used as a summary in an index or search results.\n\n` +
-				`Document:\n${content}`;
-
 			// Determine whether to use streaming based on content length and configuration
 			const shouldUseStreaming =
 				this.useStreaming && content.length > 10000;
@@ -73,19 +66,21 @@ export class ClaudeProvider implements AIExcerptProvider {
 			let excerptText = "";
 
 			if (shouldUseStreaming) {
-				excerptText = await this._generateWithStreaming(userPrompt);
+				excerptText = await this._generateWithStreaming(
+					content,
+					maxLength
+				);
 			} else {
-				excerptText = await this._generateWithStandardAPI(userPrompt);
-			}
-
-			// Ensure the excerpt is within the maximum length
-			if (excerptText.length > maxLength) {
-				excerptText = excerptText.substring(0, maxLength - 3) + "...";
+				excerptText = await this._generateWithStandardAPI(
+					content,
+					maxLength
+				);
 			}
 
 			// Reset retry count on success
 			this.retryCount = 0;
 
+			// Return the excerptText that is already properly processed
 			return excerptText;
 		} catch (error) {
 			// Enhanced error logging with request IDs when available
@@ -187,23 +182,46 @@ export class ClaudeProvider implements AIExcerptProvider {
 	 * @private
 	 */
 	private async _generateWithStandardAPI(
-		userPrompt: string
+		content: string,
+		maxLength: number
 	): Promise<string> {
 		// Enforce rate limiting
 		await this._enforceRateLimit();
+
+		// Get the system prompt based on prompt type
+		const systemPrompt = this._getPromptForType();
+
+		// Calculate a safe buffer to allow for complete sentences
+		const safeMaxLength = Math.min(
+			maxLength + Math.max(Math.floor(maxLength * 0.2), 30),
+			maxLength * 1.5
+		);
+
+		// Enhanced system prompt with clear instructions about complete sentences
+		const enhancedSystemPrompt = `${systemPrompt}
+		
+		Generate a concise excerpt (maximum ${maxLength} characters) that captures the essence of this document.
+		
+		IMPORTANT RULES:
+		- Your entire response must be under ${maxLength} characters
+		- Always end with a complete sentence - NEVER end mid-sentence or with a truncated word
+		- Do not use ellipses (...) in your response
+		- Match the author's writing style and voice
+		- If approaching the character limit, find a natural ending point for a complete thought
+		- Count your characters carefully to ensure you don't exceed the limit`;
 
 		// Make API call to Claude
 		const { data: response } = await this.client.messages
 			.create({
 				model: this.model,
-				max_tokens: 100, // Limit token usage for efficiency
+				max_tokens: 300, // Increased to allow more room for complete sentences
 				messages: [
 					{
 						role: "user",
-						content: userPrompt,
+						content: `Document:\n${content}`,
 					},
 				],
-				system: this._getPromptForType(),
+				system: enhancedSystemPrompt,
 			})
 			.withResponse();
 
@@ -219,7 +237,9 @@ export class ClaudeProvider implements AIExcerptProvider {
 		if (response.content && response.content.length > 0) {
 			const contentBlock = response.content[0];
 			if ("text" in contentBlock) {
-				return contentBlock.text.trim();
+				const excerptText = contentBlock.text.trim();
+				// Ensure we have a complete sentence that doesn't exceed maxLength
+				return this._ensureCompleteSentence(excerptText, maxLength);
 			}
 		}
 
@@ -231,21 +251,46 @@ export class ClaudeProvider implements AIExcerptProvider {
 	 * Recommended for longer content to prevent timeouts
 	 * @private
 	 */
-	private async _generateWithStreaming(userPrompt: string): Promise<string> {
+	private async _generateWithStreaming(
+		content: string,
+		maxLength: number
+	): Promise<string> {
 		// Enforce rate limiting
 		await this._enforceRateLimit();
+
+		// Get the system prompt based on prompt type
+		const systemPrompt = this._getPromptForType();
+
+		// Calculate a safe buffer to allow for complete sentences
+		const safeMaxLength = Math.min(
+			maxLength + Math.max(Math.floor(maxLength * 0.2), 30),
+			maxLength * 1.5
+		);
+
+		// Enhanced system prompt with clear instructions about complete sentences
+		const enhancedSystemPrompt = `${systemPrompt}
+		
+		Generate a concise excerpt (maximum ${maxLength} characters) that captures the essence of this document.
+		
+		IMPORTANT RULES:
+		- Your entire response must be under ${maxLength} characters
+		- Always end with a complete sentence - NEVER end mid-sentence or with a truncated word
+		- Do not use ellipses (...) in your response
+		- Match the author's writing style and voice
+		- If approaching the character limit, find a natural ending point for a complete thought
+		- Count your characters carefully to ensure you don't exceed the limit`;
 
 		// Create a stream for the Claude API call
 		const stream = await this.client.messages.stream({
 			model: this.model,
-			max_tokens: 100, // Limit token usage for efficiency
+			max_tokens: 300, // Increased to allow more room for complete sentences
 			messages: [
 				{
 					role: "user",
-					content: userPrompt,
+					content: `Document:\n${content}`,
 				},
 			],
-			system: this._getPromptForType(),
+			system: enhancedSystemPrompt,
 		});
 
 		// Get the final message which includes the complete response
@@ -263,11 +308,81 @@ export class ClaudeProvider implements AIExcerptProvider {
 		if (message.content && message.content.length > 0) {
 			const contentBlock = message.content[0];
 			if ("text" in contentBlock) {
-				return contentBlock.text.trim();
+				const excerptText = contentBlock.text.trim();
+				// Ensure we have a complete sentence that doesn't exceed maxLength
+				return this._ensureCompleteSentence(excerptText, maxLength);
 			}
 		}
 
 		throw new Error("Unexpected response format from Claude streaming API");
+	}
+
+	/**
+	 * Ensures the excerpt ends with a complete sentence and doesn't exceed maxLength
+	 * @private
+	 */
+	private _ensureCompleteSentence(text: string, maxLength: number): string {
+		// If text is already within limits, return it
+		if (text.length <= maxLength) {
+			return text;
+		}
+
+		// Find the last sentence boundary within the max length
+		const sentenceEndRegex = /[.!?]\s*(?=[A-Z]|$)/g;
+		let lastMatchIndex = -1;
+
+		try {
+			const matches = [...text.matchAll(sentenceEndRegex)];
+
+			for (const match of matches) {
+				if (match.index !== undefined) {
+					// Safe check for index property
+					const position = match.index + match[0].length;
+					if (position <= maxLength) {
+						lastMatchIndex = position;
+					} else {
+						break;
+					}
+				}
+			}
+		} catch (error) {
+			console.warn("Error matching sentence boundaries:", error);
+			// Continue to the fallback method if regex fails
+		}
+
+		// If we found a valid sentence ending, use it
+		if (lastMatchIndex > 0) {
+			return text.substring(0, lastMatchIndex).trim();
+		}
+
+		// Fallback to simpler punctuation-based approach if regex didn't work
+		const lastPeriodIndex = text.lastIndexOf(".", maxLength - 1);
+		const lastQuestionIndex = text.lastIndexOf("?", maxLength - 1);
+		const lastExclamationIndex = text.lastIndexOf("!", maxLength - 1);
+
+		// Find the latest ending punctuation within the limit
+		const endIndex = Math.max(
+			lastPeriodIndex > 0 ? lastPeriodIndex : 0,
+			lastQuestionIndex > 0 ? lastQuestionIndex : 0,
+			lastExclamationIndex > 0 ? lastExclamationIndex : 0
+		);
+
+		// If we found a sentence ending, use it
+		if (endIndex > 0) {
+			return text.substring(0, endIndex + 1).trim();
+		}
+
+		// Last resort: if the text is longer than maxLength, find a space to break at
+		if (text.length > maxLength) {
+			const lastSpaceIndex = text.lastIndexOf(" ", maxLength - 1);
+			if (lastSpaceIndex > maxLength * 0.75) {
+				// Only use if we can keep at least 75% of the text
+				return text.substring(0, lastSpaceIndex).trim() + ".";
+			}
+		}
+
+		// If all else fails, truncate and add a period to simulate a complete sentence
+		return text.substring(0, maxLength - 1).trim() + ".";
 	}
 
 	/**

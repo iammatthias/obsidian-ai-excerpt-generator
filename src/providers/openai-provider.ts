@@ -52,14 +52,6 @@ export class OpenAIProvider implements AIExcerptProvider {
 	 */
 	async generateExcerpt(content: string, maxLength: number): Promise<string> {
 		try {
-			// Prepare instructions for both API types
-			const instructions =
-				`Create a very short, informative excerpt from the provided document. ` +
-				`Keep your response under ${maxLength} characters. ` +
-				`Do not use quotation marks, ellipses (...), or any special formatting in your response. ` +
-				`Always provide complete sentences and thoughts, never truncated. ` +
-				`Focus on capturing the key points and main theme while matching the original author's style.`;
-
 			let excerptText = "";
 
 			// Use Chat API if specifically requested, otherwise try Responses API first
@@ -73,7 +65,7 @@ export class OpenAIProvider implements AIExcerptProvider {
 					// Use the Responses API (preferred for file summarization)
 					excerptText = await this._generateWithResponsesAPI(
 						content,
-						instructions
+						maxLength
 					);
 				} catch (error) {
 					// Fall back to Chat API if Responses API fails
@@ -88,37 +80,7 @@ export class OpenAIProvider implements AIExcerptProvider {
 				}
 			}
 
-			// Ensure the excerpt is within the maximum length
-			if (excerptText.length > maxLength) {
-				// Find the last complete sentence that fits within the limit
-				const lastPeriodIndex = excerptText.lastIndexOf(
-					".",
-					maxLength - 1
-				);
-				const lastQuestionIndex = excerptText.lastIndexOf(
-					"?",
-					maxLength - 1
-				);
-				const lastExclamationIndex = excerptText.lastIndexOf(
-					"!",
-					maxLength - 1
-				);
-
-				// Find the latest ending punctuation within the limit
-				const endIndex = Math.max(
-					lastPeriodIndex > 0 ? lastPeriodIndex : 0,
-					lastQuestionIndex > 0 ? lastQuestionIndex : 0,
-					lastExclamationIndex > 0 ? lastExclamationIndex : 0
-				);
-
-				// If we found a sentence ending, use it; otherwise trim at max length
-				if (endIndex > 0) {
-					excerptText = excerptText.substring(0, endIndex + 1);
-				} else {
-					excerptText = excerptText.substring(0, maxLength);
-				}
-			}
-
+			// Return the excerptText that is already properly processed
 			return excerptText;
 		} catch (error) {
 			// Log error details including request ID if available
@@ -146,8 +108,30 @@ export class OpenAIProvider implements AIExcerptProvider {
 	 */
 	private async _generateWithResponsesAPI(
 		content: string,
-		instructions: string
+		maxLength: number
 	): Promise<string> {
+		// Get the appropriate prompt based on type
+		const systemPrompt = this._getPromptForType();
+
+		// Calculate a safe buffer to allow for complete sentences (20% extra but at least 30 chars)
+		const safeMaxLength = Math.min(
+			maxLength + Math.max(Math.floor(maxLength * 0.2), 30),
+			maxLength * 1.5
+		);
+
+		// Add specific instructions for max length with emphasis on complete sentences
+		const instructions = `${systemPrompt}
+		
+		Your task is to create a concise excerpt that is under ${maxLength} characters, but you MUST end with a complete sentence or thought.
+		
+		IMPORTANT RULES:
+		- End with a complete sentence - never end mid-sentence
+		- Avoid ellipses (...) or any truncation indicators
+		- No quotation marks around the output
+		- No special formatting
+		- If your response is approaching the limit, find a way to complete the thought naturally
+		- Track your character count to ensure you don't exceed the limit`;
+
 		const response = await this.client.responses.create({
 			model: this.model,
 			instructions,
@@ -155,7 +139,10 @@ export class OpenAIProvider implements AIExcerptProvider {
 			temperature: 0.7, // Balanced between creativity and accuracy
 		});
 
-		return response.output_text?.trim() || "";
+		let excerptText = response.output_text?.trim() || "";
+
+		// Ensure we have a complete sentence that doesn't exceed maxLength
+		return this._ensureCompleteSentence(excerptText, maxLength);
 	}
 
 	/**
@@ -165,14 +152,30 @@ export class OpenAIProvider implements AIExcerptProvider {
 		content: string,
 		maxLength: number
 	): Promise<string> {
-		// Prepare user prompt with instructions and content
-		const userPrompt =
-			`Generate a concise excerpt (maximum ${maxLength} characters) that captures the essence of this document. ` +
-			`Focus on the main points while matching the author's exact writing style and voice. ` +
-			`Never use ellipses (...) - always use complete sentences and thoughts. ` +
-			`Avoid generic AI-like phrasing - use the author's own expressions, turns of phrase, and language patterns. ` +
-			`The excerpt will be used as a summary in an index or search results.\n\n` +
-			`Document:\n${content}`;
+		// Get the appropriate prompt based on type
+		const systemPrompt = this._getPromptForType();
+
+		// Calculate a safe buffer to allow for complete sentences (20% extra but at least 30 chars)
+		const safeMaxLength = Math.min(
+			maxLength + Math.max(Math.floor(maxLength * 0.2), 30),
+			maxLength * 1.5
+		);
+
+		// Enhanced system message with clear instructions about complete sentences
+		const systemMessage = `${systemPrompt}
+		
+		Generate a concise excerpt (maximum ${maxLength} characters) that captures the essence of this document.
+		
+		IMPORTANT RULES:
+		- Your entire response must be under ${maxLength} characters
+		- Always end with a complete sentence - NEVER end mid-sentence or with a truncated word
+		- Do not use ellipses (...) in your response
+		- Match the author's writing style and voice
+		- If approaching the character limit, find a natural ending point for a complete thought
+		- Count your characters carefully to ensure you don't exceed the limit`;
+
+		// Prepare user message with content only
+		const userMessage = `Document:\n${content}`;
 
 		// Make API call to OpenAI
 		const response = await this.client.chat.completions.create({
@@ -180,15 +183,15 @@ export class OpenAIProvider implements AIExcerptProvider {
 			messages: [
 				{
 					role: "system",
-					content: this._getPromptForType(),
+					content: systemMessage,
 				},
 				{
 					role: "user",
-					content: userPrompt,
+					content: userMessage,
 				},
 			],
-			max_tokens: 100,
-			temperature: 0.3, // Slightly higher temperature for more natural language
+			max_tokens: 300, // Increased to allow more room for complete sentences
+			temperature: 0.3,
 		});
 
 		// Process and validate response
@@ -197,7 +200,78 @@ export class OpenAIProvider implements AIExcerptProvider {
 		}
 
 		// Extract the excerpt text
-		return response.choices[0]?.message?.content?.trim() || "";
+		let excerptText = response.choices[0]?.message?.content?.trim() || "";
+
+		// Ensure we have a complete sentence that doesn't exceed maxLength
+		return this._ensureCompleteSentence(excerptText, maxLength);
+	}
+
+	/**
+	 * Ensures the excerpt ends with a complete sentence and doesn't exceed maxLength
+	 * @private
+	 */
+	private _ensureCompleteSentence(text: string, maxLength: number): string {
+		// If text is already within limits, return it
+		if (text.length <= maxLength) {
+			return text;
+		}
+
+		// Find the last sentence boundary within the max length
+		const sentenceEndRegex = /[.!?]\s*(?=[A-Z]|$)/g;
+		let lastMatchIndex = -1;
+
+		try {
+			const matches = [...text.matchAll(sentenceEndRegex)];
+
+			for (const match of matches) {
+				if (match.index !== undefined) {
+					// Safe check for index property
+					const position = match.index + match[0].length;
+					if (position <= maxLength) {
+						lastMatchIndex = position;
+					} else {
+						break;
+					}
+				}
+			}
+		} catch (error) {
+			console.warn("Error matching sentence boundaries:", error);
+			// Continue to the fallback method if regex fails
+		}
+
+		// If we found a valid sentence ending, use it
+		if (lastMatchIndex > 0) {
+			return text.substring(0, lastMatchIndex).trim();
+		}
+
+		// Fallback to simpler punctuation-based approach if regex didn't work
+		const lastPeriodIndex = text.lastIndexOf(".", maxLength - 1);
+		const lastQuestionIndex = text.lastIndexOf("?", maxLength - 1);
+		const lastExclamationIndex = text.lastIndexOf("!", maxLength - 1);
+
+		// Find the latest ending punctuation within the limit
+		const endIndex = Math.max(
+			lastPeriodIndex > 0 ? lastPeriodIndex : 0,
+			lastQuestionIndex > 0 ? lastQuestionIndex : 0,
+			lastExclamationIndex > 0 ? lastExclamationIndex : 0
+		);
+
+		// If we found a sentence ending, use it
+		if (endIndex > 0) {
+			return text.substring(0, endIndex + 1).trim();
+		}
+
+		// Last resort: if the text is longer than maxLength, find a space to break at
+		if (text.length > maxLength) {
+			const lastSpaceIndex = text.lastIndexOf(" ", maxLength - 1);
+			if (lastSpaceIndex > maxLength * 0.75) {
+				// Only use if we can keep at least 75% of the text
+				return text.substring(0, lastSpaceIndex).trim() + ".";
+			}
+		}
+
+		// If all else fails, truncate and add a period to simulate a complete sentence
+		return text.substring(0, maxLength - 1).trim() + ".";
 	}
 
 	/**

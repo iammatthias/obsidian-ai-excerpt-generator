@@ -6,6 +6,7 @@ import { SelectDirectoryModal } from "./modals/select-directory-modal";
 import { CommandsModal } from "./modals/commands-modal";
 import { FileProcessor } from "./services/file-processor";
 import { Prompts } from "./utils/prompts";
+import { ProviderFactory } from "./providers/provider-factory";
 
 /**
  * AI Excerpt Generator Plugin
@@ -57,6 +58,13 @@ export default class AIExcerptGenerator
 			new Notice(
 				"Failed to initialize prompt system. The plugin may not function correctly."
 			);
+		}
+
+		// Initialize the provider factory for efficient provider management
+		try {
+			ProviderFactory.initialize();
+		} catch (error) {
+			console.error("Error initializing provider factory:", error);
 		}
 
 		// Initialize the file processor
@@ -197,6 +205,14 @@ export default class AIExcerptGenerator
 	onunload() {
 		// Clean up resources
 		console.log("Unloading AI Excerpt Generator plugin");
+
+		// Shut down provider factory to clean up any active provider instances
+		try {
+			ProviderFactory.shutdown();
+		} catch (error) {
+			console.error("Error shutting down provider factory:", error);
+		}
+
 		this.fileProcessor = null;
 		this.statusBarItem = null;
 	}
@@ -277,10 +293,10 @@ export default class AIExcerptGenerator
 				this.statusBarItem.setText(
 					`AI Excerpt: ${processed}/${total} files`
 				);
-				this.statusBarItem.style.display = "block";
+				this.statusBarItem.style.display = "inline-flex";
 			} else {
 				this.statusBarItem.setText("AI Excerpt: Ready");
-				this.statusBarItem.style.display = "block";
+				this.statusBarItem.style.display = "inline-flex";
 			}
 		}
 	}
