@@ -18,21 +18,50 @@ export const DEFAULT_SETTINGS: AIExcerptSettings = {
 	maxLength: 140,
 };
 
-// Example outputs for different prompt types
+// Base examples for different prompt types (will be adapted based on length)
 export const PROMPT_EXAMPLES = {
-	[PromptType.DEFAULT]:
-		"This is a concise summary that preserves the original author's unique voice and style. It captures key points while maintaining the same tone as the source.",
-	[PromptType.ACADEMIC]:
-		"The research demonstrates significant correlations between variables X and Y (p<.001), suggesting theoretical implications for our understanding of the underlying mechanisms as proposed in recent literature.",
-	[PromptType.PROFESSIONAL]:
-		"Our analysis indicates a 24% increase in quarterly revenue, driven primarily by expansion in the APAC region and improved customer retention rates across enterprise accounts.",
-	[PromptType.BLOG]:
-		"I've been exploring this fascinating concept for weeks now, and I'm excited to share what I've discovered. It's completely changed how I think about this topic!",
-	[PromptType.SIMPLIFIED]:
-		"This idea is about how things connect in ways we didn't see before. When we look at the patterns, we can better understand how everything works together.",
-	[PromptType.SOCIAL]:
-		"Just had a major breakthrough on this project! Can't believe it took me so long to see the connection. This changes everything about how we approach the problem.",
+	[PromptType.DEFAULT]: {
+		short: "This concise summary captures the essence while maintaining the author's unique voice and idiomatic expressions.",
+		medium: "This concise summary preserves the original author's distinctive voice and writing style. It captures key points while maintaining the same tone, word choice, and sentence structures found in the source material.",
+		long: "This comprehensive summary perfectly mirrors the original author's distinctive voice and writing style. It captures all key points while maintaining the same tone, pacing, idiomatic expressions, and sentence structures found in the source material. Every sentence feels authentic to the author's writing - never generic or AI-generated.",
+	},
+	[PromptType.ACADEMIC]: {
+		short: "The research reveals significant correlations between variables, suggesting important theoretical implications for understanding causal mechanisms.",
+		medium: "The research demonstrates statistically significant correlations between variables X and Y (p<.001), suggesting theoretical implications for our understanding of underlying mechanisms as proposed in recent literature.",
+		long: "The research methodology reveals statistically significant correlations between variables X and Y (p<.001), suggesting important theoretical implications for our understanding of causal mechanisms. These findings align with hypotheses proposed in recent literature while extending the conceptual framework through novel analytical approaches and methodological innovations.",
+	},
+	[PromptType.PROFESSIONAL]: {
+		short: "Analysis shows 24% revenue growth, driven by APAC expansion and improved enterprise retention rates.",
+		medium: "Our analysis indicates a 24% increase in quarterly revenue, driven primarily by expansion in the APAC region and improved customer retention rates across enterprise accounts.",
+		long: "Our comprehensive analysis indicates a 24% increase in quarterly revenue, driven primarily by strategic expansion in the APAC region and significantly improved customer retention rates across enterprise accounts. These results exceed projections by 7 percentage points and position us favorably for continued growth in the next fiscal period.",
+	},
+	[PromptType.BLOG]: {
+		short: "I've been exploring this fascinating concept and I'm excited to share my discoveries!",
+		medium: "I've been exploring this fascinating concept for weeks now, and I'm excited to share what I've discovered. It's completely changed how I think about this topic!",
+		long: "I've been absolutely obsessed with exploring this fascinating concept for the past few weeks, and I'm super excited to finally share what I've discovered with all of you! It's completely changed how I think about this topic, and I'm betting it might just revolutionize your perspective too!",
+	},
+	[PromptType.SIMPLIFIED]: {
+		short: "This idea shows how things connect in new ways, helping us understand how everything works together.",
+		medium: "This idea is about how things connect in ways we didn't see before. When we look at the patterns, we can better understand how everything works together.",
+		long: "This idea is about how different things connect in ways we didn't notice before. When we take time to look at the patterns more carefully, we can better understand how everything works together. This helps us solve problems by seeing the whole picture instead of just separate parts.",
+	},
+	[PromptType.SOCIAL]: {
+		short: "Major breakthrough on this project! This changes everything about our approach.",
+		medium: "Just had a major breakthrough on this project! Can't believe it took me so long to see the connection. This changes everything about how we approach the problem.",
+		long: "Just had the BIGGEST breakthrough on this project! 🤯 Can't believe it took me so long to see the connection that was right in front of me the whole time. This completely changes everything about how we've been approaching the problem. So excited to share more details soon!",
+	},
 };
+
+// Helper function to get appropriately sized example based on length setting
+function getExampleForLength(type: PromptType, length: number): string {
+	if (length <= 100) {
+		return PROMPT_EXAMPLES[type].short;
+	} else if (length <= 200) {
+		return PROMPT_EXAMPLES[type].medium;
+	} else {
+		return PROMPT_EXAMPLES[type].long;
+	}
+}
 
 export class AIExcerptSettingTab extends PluginSettingTab {
 	plugin: AIExcerptPlugin;
@@ -67,8 +96,6 @@ export class AIExcerptSettingTab extends PluginSettingTab {
 
 		// Claude Settings - Only show if Claude is selected
 		if (this.plugin.settings.provider === LLMProvider.CLAUDE) {
-			containerEl.createEl("h3", { text: "Claude Settings" });
-
 			new Setting(containerEl)
 				.setName("Claude API Key")
 				.setDesc("Your Anthropic API key for Claude")
@@ -102,8 +129,6 @@ export class AIExcerptSettingTab extends PluginSettingTab {
 
 		// OpenAI Settings - Only show if OpenAI is selected
 		if (this.plugin.settings.provider === LLMProvider.OPENAI) {
-			containerEl.createEl("h3", { text: "OpenAI Settings" });
-
 			new Setting(containerEl)
 				.setName("OpenAI API Key")
 				.setDesc("Your OpenAI API key")
@@ -135,88 +160,79 @@ export class AIExcerptSettingTab extends PluginSettingTab {
 				});
 		}
 
-		// General settings
-		containerEl.createEl("h3", { text: "General Settings" });
-
-		// Prompt Type Selection with Examples
-		const promptTypeContainer = containerEl.createDiv(
-			"prompt-type-settings"
-		);
-
-		// Add title for prompt type section
-		promptTypeContainer.createEl("div", {
-			text: "Prompt Type",
-			cls: "setting-item-name",
-		});
-
-		promptTypeContainer.createEl("div", {
-			text: "Select the style of excerpt to generate",
-			cls: "setting-item-description",
-		});
-
-		// Create dropdown for prompt types
-		const promptDropdownContainer = promptTypeContainer.createDiv(
-			"prompt-dropdown-container"
-		);
-		const promptDropdown = document.createElement("select");
-		promptDropdown.className = "dropdown";
-
-		// Add options to dropdown
-		Object.values(PromptType).forEach((type) => {
-			const option = document.createElement("option");
-			option.value = type;
-
-			// Convert enum value to readable name
-			const readableName = type
-				.replace("excerpt-generation", "Default")
-				.replace(/-/g, " ")
-				.replace(/(\b\w)/g, (match) => match.toUpperCase());
-
-			option.text = readableName;
-			option.selected = this.plugin.settings.promptType === type;
-			promptDropdown.appendChild(option);
-		});
-
-		promptDropdownContainer.appendChild(promptDropdown);
-
-		// Create example container
-		const exampleContainer = promptTypeContainer.createDiv(
-			"prompt-example-container"
-		);
-		exampleContainer.createEl("h4", { text: "Example Output" });
-
-		const exampleText = exampleContainer.createEl("div", {
-			cls: "prompt-example-text",
-			text: PROMPT_EXAMPLES[this.plugin.settings.promptType],
-		});
-
-		// Add some basic styling
-		exampleContainer.style.padding = "10px";
-		exampleContainer.style.marginTop = "10px";
-		exampleContainer.style.backgroundColor = "var(--background-secondary)";
-		exampleContainer.style.borderRadius = "5px";
-
-		// Handle dropdown change
-		promptDropdown.addEventListener("change", async (e) => {
-			const target = e.target as HTMLSelectElement;
-			const newType = target.value as PromptType;
-			this.plugin.settings.promptType = newType;
-			exampleText.textContent = PROMPT_EXAMPLES[newType];
-			await this.plugin.saveSettings();
-		});
-
-		new Setting(containerEl)
+		// Max Length Slider (moved before prompt type)
+		let currentMaxLength = this.plugin.settings.maxLength;
+		const lengthSetting = new Setting(containerEl)
 			.setName("Max Excerpt Length")
 			.setDesc("Maximum number of characters for generated excerpts")
 			.addSlider((slider) =>
 				slider
 					.setLimits(50, 300, 10)
-					.setValue(this.plugin.settings.maxLength)
+					.setValue(currentMaxLength)
 					.setDynamicTooltip()
 					.onChange(async (value) => {
+						currentMaxLength = value;
 						this.plugin.settings.maxLength = value;
+
+						// Update example text if it exists
+						const exampleText = containerEl.querySelector(
+							".prompt-example-text"
+						);
+						if (exampleText) {
+							exampleText.textContent = getExampleForLength(
+								this.plugin.settings.promptType,
+								value
+							);
+						}
+
 						await this.plugin.saveSettings();
 					})
 			);
+
+		// Prompt Type Selection with Examples
+		new Setting(containerEl)
+			.setName("Prompt Type")
+			.setDesc("Select the style of excerpt to generate")
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOption(PromptType.DEFAULT, "Default")
+					.addOption(PromptType.ACADEMIC, "Academic")
+					.addOption(PromptType.PROFESSIONAL, "Professional")
+					.addOption(PromptType.BLOG, "Blog")
+					.addOption(PromptType.SIMPLIFIED, "Simplified")
+					.addOption(PromptType.SOCIAL, "Social Media")
+					.setValue(this.plugin.settings.promptType)
+					.onChange(async (value: string) => {
+						const newType = value as PromptType;
+						this.plugin.settings.promptType = newType;
+
+						// Update example text
+						const exampleText = containerEl.querySelector(
+							".prompt-example-text"
+						);
+						if (exampleText) {
+							exampleText.textContent = getExampleForLength(
+								newType,
+								currentMaxLength
+							);
+						}
+
+						await this.plugin.saveSettings();
+					});
+			});
+
+		// Example Output Section
+		const exampleContainer = containerEl.createDiv(
+			"prompt-example-container"
+		);
+		exampleContainer.createEl("h4", { text: "Example Output" });
+
+		exampleContainer.createEl("div", {
+			cls: "prompt-example-text",
+			text: getExampleForLength(
+				this.plugin.settings.promptType,
+				currentMaxLength
+			),
+		});
 	}
 }

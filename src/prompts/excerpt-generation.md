@@ -2,8 +2,8 @@
   <meta>
     title: Excerpt Generation Prompt
     description: Creates concise, informative excerpts from longer texts
-    author: 
-    created: 
+    author: Matthias Jordan
+    created: March 25, 2025 
     version: 1.0.0
     tags:
       - excerpt
@@ -15,10 +15,14 @@
     instructions:
       - Keep your response under the character limit specified.
       - Do not use quotation marks or any special formatting in your response.
+      - Never use ellipses (...) - always complete all sentences and thoughts.
       - Focus on capturing the key points and main theme of the document.
-      - Carefully analyze and mirror the original text's tone, pacing, vocabulary, and sentence structure.
-      - Closely match the author's writing style - if they use humor, maintain it; if they're formal, stay formal; if they're passionate, preserve that energy.
-      - Your summary should feel like it was written by the original author, not by an AI.
+      - Use wordplay, turns of phrase, and idioms that mirror those in the source material.
+      - Match the source text's sentence structure, rhythm, and pacing.
+      - Adopt the author's vocabulary preferences and distinctive expressions.
+      - If they use humor, maintain it; if they're formal, stay formal; if they're passionate, preserve that energy.
+      - Be concise but natural - avoid generic "AI-like" phrasing or formal, detached language.
+      - Your excerpt should feel exactly like the original author wrote it, not an AI summary.
     content:
       text: {{ original_text }}
       character_limit: {{ character_limit }}

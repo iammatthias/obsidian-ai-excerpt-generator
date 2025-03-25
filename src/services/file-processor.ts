@@ -7,7 +7,7 @@ import {
 	Vault,
 	normalizePath,
 } from "obsidian";
-import { AIExcerptSettings, LLMProvider } from "../types";
+import { AIExcerptPlugin, AIExcerptSettings, LLMProvider } from "../types";
 import { ProviderFactory } from "../providers/provider-factory";
 import { FileUtils } from "../utils/file-utils";
 
@@ -26,6 +26,7 @@ export class FileProcessor {
 	private vault: Vault;
 	private fileManager: FileManager;
 	private settings: AIExcerptSettings;
+	private plugin: AIExcerptPlugin | null = null;
 
 	/**
 	 * Creates a new FileProcessor instance
@@ -33,15 +34,18 @@ export class FileProcessor {
 	 * @param vault - The Obsidian vault instance
 	 * @param fileManager - The Obsidian file manager instance
 	 * @param settings - Plugin settings containing API keys and preferences
+	 * @param plugin - Reference to the main plugin instance (optional)
 	 */
 	constructor(
 		vault: Vault,
 		fileManager: FileManager,
-		settings: AIExcerptSettings
+		settings: AIExcerptSettings,
+		plugin?: AIExcerptPlugin
 	) {
 		this.vault = vault;
 		this.fileManager = fileManager;
 		this.settings = settings;
+		this.plugin = plugin || null;
 	}
 
 	/**
@@ -103,8 +107,16 @@ export class FileProcessor {
 						new Notice(
 							`Added frontmatter with generated excerpt to ${file.name}`
 						);
+
+					// Release the provider after successful use
+					ProviderFactory.releaseProvider(provider);
 					return;
 				} catch (providerError) {
+					// Report provider failure
+					ProviderFactory.reportProviderFailure(
+						this.settings.provider
+					);
+
 					// Try fallback provider if primary fails
 					const fallbackResult =
 						ProviderFactory.createFallbackProvider(
@@ -129,26 +141,47 @@ export class FileProcessor {
 							);
 						}
 
-						const excerptText =
-							await fallbackResult.provider.generateExcerpt(
-								contentWithoutFrontmatter,
-								this.settings.maxLength
+						try {
+							const excerptText =
+								await fallbackResult.provider.generateExcerpt(
+									contentWithoutFrontmatter,
+									this.settings.maxLength
+								);
+
+							// For files without frontmatter, we need to add it
+							await this.vault.process(file, (data) => {
+								return FileUtils.createContentWithExcerpt(
+									content,
+									excerptText
+								);
+							});
+
+							if (showNotices) {
+								new Notice(
+									`Added frontmatter with excerpt using ${fallbackName} to ${file.name}`
+								);
+							}
+
+							// Release the fallback provider after successful use
+							ProviderFactory.releaseProvider(
+								fallbackResult.provider
+							);
+							return;
+						} catch (fallbackError) {
+							// Report fallback provider failure as well
+							if (fallbackResult.fallbackType) {
+								ProviderFactory.reportProviderFailure(
+									fallbackResult.fallbackType
+								);
+							}
+
+							// Release the fallback provider
+							ProviderFactory.releaseProvider(
+								fallbackResult.provider
 							);
 
-						// For files without frontmatter, we need to add it
-						await this.vault.process(file, (data) => {
-							return FileUtils.createContentWithExcerpt(
-								content,
-								excerptText
-							);
-						});
-
-						if (showNotices) {
-							new Notice(
-								`Added frontmatter with excerpt using ${fallbackName} to ${file.name}`
-							);
+							throw fallbackError;
 						}
-						return;
 					} else if (fallbackResult.needsConfiguration) {
 						const primaryName =
 							this.settings.provider === LLMProvider.CLAUDE
@@ -166,75 +199,93 @@ export class FileProcessor {
 							);
 						}
 
+						// Release the provider
+						ProviderFactory.releaseProvider(provider);
+
 						// Re-throw the original error
 						throw providerError;
 					} else {
+						// Release the provider
+						ProviderFactory.releaseProvider(provider);
+
 						// No fallback available, re-throw the original error
 						throw providerError;
 					}
 				}
 			}
 
+			// Extract content without frontmatter for generating excerpt
+			const contentWithoutFrontmatter =
+				FileUtils.removeFrontmatter(content);
+
 			// Check if excerpt field exists
-			const { hasExcerpt, excerpt } =
-				FileUtils.extractExcerptFromFrontmatter(frontmatter!);
+			const { hasExcerpt } = FileUtils.extractExcerptFromFrontmatter(
+				frontmatter!
+			);
 
-			if (!hasExcerpt || !excerpt) {
-				// Generate excerpt from content without frontmatter
-				const contentWithoutFrontmatter =
-					FileUtils.removeFrontmatter(content);
+			// We'll generate a new excerpt regardless of whether one already exists
+			try {
+				const excerptText = await provider.generateExcerpt(
+					contentWithoutFrontmatter,
+					this.settings.maxLength
+				);
 
-				// Use AI to generate excerpt
-				try {
-					const excerptText = await provider.generateExcerpt(
-						contentWithoutFrontmatter,
-						this.settings.maxLength
-					);
+				// Use fileManager.processFrontMatter to safely update the frontmatter
+				await this.fileManager.processFrontMatter(
+					file,
+					(frontmatter) => {
+						frontmatter["excerpt"] = excerptText;
+					}
+				);
 
-					// Use fileManager.processFrontMatter to safely update the frontmatter
-					await this.fileManager.processFrontMatter(
-						file,
-						(frontmatter) => {
-							frontmatter["excerpt"] = excerptText;
-						}
-					);
-
-					if (showNotices)
+				if (showNotices) {
+					if (hasExcerpt) {
+						new Notice(
+							`Updated excerpt in frontmatter for ${file.name}`
+						);
+					} else {
 						new Notice(
 							`Added excerpt field to frontmatter in ${file.name}`
 						);
-				} catch (providerError) {
-					// Try fallback provider if primary fails
-					const fallbackResult =
-						ProviderFactory.createFallbackProvider(
-							this.settings,
-							this.settings.provider
+					}
+				}
+
+				// Release the provider after successful use
+				ProviderFactory.releaseProvider(provider);
+			} catch (providerError) {
+				// Report provider failure
+				ProviderFactory.reportProviderFailure(this.settings.provider);
+
+				// Try fallback provider if primary fails
+				const fallbackResult = ProviderFactory.createFallbackProvider(
+					this.settings,
+					this.settings.provider
+				);
+
+				if (fallbackResult.provider) {
+					const fallbackName =
+						fallbackResult.fallbackType === LLMProvider.OPENAI
+							? "OpenAI"
+							: "Claude";
+
+					if (showNotices) {
+						new Notice(
+							`${
+								this.settings.provider === LLMProvider.CLAUDE
+									? "Claude"
+									: "OpenAI"
+							} API failed. Trying ${fallbackName} as fallback...`
 						);
+					}
 
-					if (fallbackResult.provider) {
-						const fallbackName =
-							fallbackResult.fallbackType === LLMProvider.OPENAI
-								? "OpenAI"
-								: "Claude";
-
-						if (showNotices) {
-							new Notice(
-								`${
-									this.settings.provider ===
-									LLMProvider.CLAUDE
-										? "Claude"
-										: "OpenAI"
-								} API failed. Trying ${fallbackName} as fallback...`
-							);
-						}
-
+					try {
 						const excerptText =
 							await fallbackResult.provider.generateExcerpt(
 								contentWithoutFrontmatter,
 								this.settings.maxLength
 							);
 
-						// Use fileManager.processFrontMatter to safely update the frontmatter
+						// Use fileManager to update frontmatter
 						await this.fileManager.processFrontMatter(
 							file,
 							(frontmatter) => {
@@ -243,82 +294,74 @@ export class FileProcessor {
 						);
 
 						if (showNotices) {
-							new Notice(
-								`Added excerpt field using ${fallbackName} to ${file.name}`
-							);
-						}
-					} else if (fallbackResult.needsConfiguration) {
-						const primaryName =
-							this.settings.provider === LLMProvider.CLAUDE
-								? "Claude"
-								: "OpenAI";
-						const missingProvider =
-							fallbackResult.fallbackType === LLMProvider.OPENAI
-								? "OpenAI"
-								: "Claude";
-
-						if (showNotices) {
-							new Notice(
-								`${primaryName} API is currently unavailable, and ${missingProvider} API key is not configured for fallback. Please add your ${missingProvider} API key in settings to enable automatic fallback.`,
-								10000 // Show for 10 seconds to ensure user sees it
-							);
+							if (hasExcerpt) {
+								new Notice(
+									`Updated excerpt in frontmatter using ${fallbackName} for ${file.name}`
+								);
+							} else {
+								new Notice(
+									`Added excerpt field to frontmatter using ${fallbackName} in ${file.name}`
+								);
+							}
 						}
 
-						// Re-throw the original error
-						throw providerError;
-					} else {
-						// No fallback available, re-throw the original error
-						throw providerError;
+						// Release the fallback provider after successful use
+						ProviderFactory.releaseProvider(
+							fallbackResult.provider
+						);
+					} catch (fallbackError) {
+						// Report fallback provider failure as well
+						if (fallbackResult.fallbackType) {
+							ProviderFactory.reportProviderFailure(
+								fallbackResult.fallbackType
+							);
+						}
+
+						// Release the fallback provider
+						ProviderFactory.releaseProvider(
+							fallbackResult.provider
+						);
+
+						throw fallbackError;
 					}
-				}
-			} else {
-				// Excerpt field exists and has content, don't modify
-				if (showNotices)
-					new Notice(`Excerpt already exists in ${file.name}`);
-			}
-		} catch (error) {
-			// Log detailed error for debugging
-			console.error(`Error processing file ${file.path}:`, error);
-
-			// Show user-friendly error notification with specific provider name when possible
-			if (showNotices) {
-				let errorMessage = "";
-
-				if (error instanceof Error) {
-					// Try to make the error message more provider-specific
-					const providerName =
+				} else if (fallbackResult.needsConfiguration) {
+					const primaryName =
 						this.settings.provider === LLMProvider.CLAUDE
 							? "Claude"
 							: "OpenAI";
-					if (
-						error.message.includes("Claude API error") ||
-						error.message.includes("Anthropic")
-					) {
-						errorMessage = error.message.replace(
-							"Claude API error",
-							`${providerName} API error`
+					const missingProvider =
+						fallbackResult.fallbackType === LLMProvider.OPENAI
+							? "OpenAI"
+							: "Claude";
+
+					if (showNotices) {
+						new Notice(
+							`${primaryName} API is currently unavailable, and ${missingProvider} API key is not configured for fallback. Please add your ${missingProvider} API key in settings to enable automatic fallback.`,
+							10000 // Show for 10 seconds to ensure user sees it
 						);
-					} else if (error.message.includes("OpenAI API error")) {
-						errorMessage = error.message.replace(
-							"OpenAI API error",
-							`${providerName} API error`
-						);
-					} else {
-						errorMessage = error.message;
 					}
+
+					// Release the provider
+					ProviderFactory.releaseProvider(provider);
+
+					// Re-throw the original error
+					throw providerError;
 				} else {
-					errorMessage = String(error);
+					// Release the provider
+					ProviderFactory.releaseProvider(provider);
+
+					// No fallback available, re-throw the original error
+					throw providerError;
 				}
-
-				new Notice(`Error processing ${file.name}: ${errorMessage}`);
 			}
-
-			// Re-throw the error if it needs to be handled by the caller
-			throw new Error(
-				`Failed to process file ${file.path}: ${
-					error instanceof Error ? error.message : String(error)
-				}`
-			);
+		} catch (error) {
+			if (showNotices)
+				new Notice(
+					`Error processing file ${file.name}: ${
+						error instanceof Error ? error.message : "Unknown error"
+					}`
+				);
+			console.error("Error processing file:", file.name, error);
 		}
 	}
 
@@ -355,6 +398,9 @@ export class FileProcessor {
 			new Notice(
 				`No markdown files found in ${folder.path} or its subfolders`
 			);
+			if (this.plugin) {
+				this.plugin.updateStatusBar(0, 0);
+			}
 			return;
 		}
 
@@ -362,23 +408,45 @@ export class FileProcessor {
 			`Processing ${files.length} files in ${folder.path} and its subfolders...`
 		);
 
+		// Initialize status bar with total files to process
+		if (this.plugin) {
+			this.plugin.updateStatusBar(0, files.length);
+		}
+
 		let processed = 0;
 		let errors = 0;
+		const batchSize = 5; // Process 5 files at a time
 
-		for (const file of files) {
-			try {
-				await this.processFile(file, false); // Don't show individual notices
-				processed++;
+		// Process files in batches to avoid overwhelming the API
+		for (let i = 0; i < files.length; i += batchSize) {
+			const batch = files.slice(i, i + batchSize);
 
-				// Show progress every 10 files
-				if (processed % 10 === 0) {
-					new Notice(
-						`Processed ${processed}/${files.length} files in ${folder.path} and subfolders`
-					);
+			// Process each file in the current batch
+			for (const file of batch) {
+				try {
+					await this.processFile(file, false); // Don't show individual notices
+					processed++;
+
+					// Update status bar with progress
+					if (this.plugin) {
+						this.plugin.updateStatusBar(processed, files.length);
+					}
+
+					// Show progress updates
+					if (processed % 5 === 0 || processed === files.length) {
+						new Notice(
+							`Processed ${processed}/${files.length} files in ${folder.path} and subfolders`
+						);
+					}
+				} catch (error) {
+					console.error(`Error processing ${file.path}:`, error);
+					errors++;
 				}
-			} catch (error) {
-				console.error(`Error processing ${file.path}:`, error);
-				errors++;
+			}
+
+			// Add a delay between batches to prevent rate limiting
+			if (i + batchSize < files.length) {
+				await new Promise((resolve) => setTimeout(resolve, 2000)); // 2-second delay between batches
 			}
 		}
 
@@ -387,6 +455,13 @@ export class FileProcessor {
 			`Completed. Processed ${processed}/${files.length} files in ${folder.path} and subfolders.` +
 				(errors > 0 ? ` Errors: ${errors}` : "")
 		);
+
+		// Reset status bar after completion
+		setTimeout(() => {
+			if (this.plugin) {
+				this.plugin.updateStatusBar(0, 0);
+			}
+		}, 5000); // Reset after 5 seconds
 	}
 
 	/**
@@ -398,21 +473,45 @@ export class FileProcessor {
 		const files = this.vault.getMarkdownFiles();
 		let processed = 0;
 		let errors = 0;
+		const batchSize = 5; // Process 5 files at a time
 
 		new Notice(`Processing ${files.length} files...`);
 
-		for (const file of files) {
-			try {
-				await this.processFile(file, false); // Don't show individual notices
-				processed++;
+		// Initialize status bar with total files to process
+		if (this.plugin) {
+			this.plugin.updateStatusBar(0, files.length);
+		}
 
-				// Show progress every 10 files
-				if (processed % 10 === 0) {
-					new Notice(`Processed ${processed}/${files.length} files`);
+		// Process files in batches to avoid overwhelming the API
+		for (let i = 0; i < files.length; i += batchSize) {
+			const batch = files.slice(i, i + batchSize);
+
+			// Process each file in the current batch
+			for (const file of batch) {
+				try {
+					await this.processFile(file, false); // Don't show individual notices
+					processed++;
+
+					// Update status bar with progress
+					if (this.plugin) {
+						this.plugin.updateStatusBar(processed, files.length);
+					}
+
+					// Show progress updates
+					if (processed % 5 === 0 || processed === files.length) {
+						new Notice(
+							`Processed ${processed}/${files.length} files`
+						);
+					}
+				} catch (error) {
+					console.error(`Error processing ${file.path}:`, error);
+					errors++;
 				}
-			} catch (error) {
-				console.error(`Error processing ${file.path}:`, error);
-				errors++;
+			}
+
+			// Add a delay between batches to prevent rate limiting
+			if (i + batchSize < files.length) {
+				await new Promise((resolve) => setTimeout(resolve, 2000)); // 2-second delay between batches
 			}
 		}
 
@@ -421,5 +520,12 @@ export class FileProcessor {
 			`Completed. Processed ${processed}/${files.length} files.` +
 				(errors > 0 ? ` Errors: ${errors}` : "")
 		);
+
+		// Reset status bar after completion
+		setTimeout(() => {
+			if (this.plugin) {
+				this.plugin.updateStatusBar(0, 0);
+			}
+		}, 5000); // Reset after 5 seconds
 	}
 }

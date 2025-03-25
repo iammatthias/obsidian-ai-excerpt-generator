@@ -16,6 +16,10 @@ export class ClaudeProvider implements AIExcerptProvider {
 	private useStreaming: boolean;
 	private promptType: PromptType;
 	private lastUsage: { input: number; output: number } | null = null;
+	private retryCount: number = 0;
+	private maxRetries: number = 5;
+	private lastRequestTime: number = 0;
+	private minRequestInterval: number = 500; // 500ms minimum between requests
 
 	/**
 	 * Creates a new Claude provider instance
@@ -79,6 +83,9 @@ export class ClaudeProvider implements AIExcerptProvider {
 				excerptText = excerptText.substring(0, maxLength - 3) + "...";
 			}
 
+			// Reset retry count on success
+			this.retryCount = 0;
+
 			return excerptText;
 		} catch (error) {
 			// Enhanced error logging with request IDs when available
@@ -90,8 +97,48 @@ export class ClaudeProvider implements AIExcerptProvider {
 					request_id: error.request_id,
 				});
 
-				// Provide more user-friendly error messages for specific error types
-				if (error.status === 529) {
+				// Handle rate limiting (429 errors) with exponential backoff
+				if (error.status === 429) {
+					if (this.retryCount < this.maxRetries) {
+						this.retryCount++;
+
+						// Extract retry-after if available in headers
+						const retryAfter =
+							typeof error.headers === "object" &&
+							error.headers &&
+							"retry-after" in error.headers
+								? parseInt(
+										error.headers["retry-after"] as string,
+										10
+								  ) * 1000
+								: null;
+
+						// Calculate delay with exponential backoff or use retry-after if provided
+						const delayMs =
+							retryAfter ||
+							Math.min(
+								Math.pow(2, this.retryCount) * 1000 +
+									Math.random() * 1000,
+								30000 // Cap at 30 seconds
+							);
+
+						console.log(
+							`Rate limited. Retrying in ${delayMs}ms (attempt ${this.retryCount}/${this.maxRetries})...`
+						);
+
+						// Wait for the calculated delay
+						await new Promise((resolve) =>
+							setTimeout(resolve, delayMs)
+						);
+
+						// Retry the request recursively
+						return this.generateExcerpt(content, maxLength);
+					} else {
+						throw new Error(
+							"Claude API rate limit exceeded. Maximum retries reached. Please try again in a few minutes."
+						);
+					}
+				} else if (error.status === 529) {
 					throw new Error(
 						"Claude API is currently overloaded. Please try again in a few minutes."
 					);
@@ -120,12 +167,31 @@ export class ClaudeProvider implements AIExcerptProvider {
 	}
 
 	/**
+	 * Ensures rate limiting by waiting if requests are too frequent
+	 * @private
+	 */
+	private async _enforceRateLimit(): Promise<void> {
+		const now = Date.now();
+		const timeSinceLastRequest = now - this.lastRequestTime;
+
+		if (timeSinceLastRequest < this.minRequestInterval) {
+			const waitTime = this.minRequestInterval - timeSinceLastRequest;
+			await new Promise((resolve) => setTimeout(resolve, waitTime));
+		}
+
+		this.lastRequestTime = Date.now();
+	}
+
+	/**
 	 * Generate excerpt using the standard Messages API
 	 * @private
 	 */
 	private async _generateWithStandardAPI(
 		userPrompt: string
 	): Promise<string> {
+		// Enforce rate limiting
+		await this._enforceRateLimit();
+
 		// Make API call to Claude
 		const { data: response } = await this.client.messages
 			.create({
@@ -166,6 +232,9 @@ export class ClaudeProvider implements AIExcerptProvider {
 	 * @private
 	 */
 	private async _generateWithStreaming(userPrompt: string): Promise<string> {
+		// Enforce rate limiting
+		await this._enforceRateLimit();
+
 		// Create a stream for the Claude API call
 		const stream = await this.client.messages.stream({
 			model: this.model,

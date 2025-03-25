@@ -3,6 +3,7 @@ import { AIExcerptPlugin, AIExcerptSettings } from "./types";
 import { DEFAULT_SETTINGS, AIExcerptSettingTab } from "./settings";
 import { GenerateAllModal } from "./modals/generate-all-modal";
 import { SelectDirectoryModal } from "./modals/select-directory-modal";
+import { CommandsModal } from "./modals/commands-modal";
 import { FileProcessor } from "./services/file-processor";
 import { Prompts } from "./utils/prompts";
 
@@ -24,6 +25,7 @@ export default class AIExcerptGenerator
 {
 	settings: AIExcerptSettings;
 	fileProcessor: FileProcessor | null;
+	statusBarItem: HTMLElement | null = null;
 
 	/**
 	 * Initializes the plugin, loads settings, and registers commands and UI elements
@@ -32,6 +34,10 @@ export default class AIExcerptGenerator
 		await this.loadSettings();
 
 		console.log("Initializing AI Excerpt Generator plugin");
+
+		// Initialize the status bar item
+		this.statusBarItem = this.addStatusBarItem();
+		this.updateStatusBar(0, 0);
 
 		// Initialize the prompt system
 		try {
@@ -57,7 +63,8 @@ export default class AIExcerptGenerator
 		this.fileProcessor = new FileProcessor(
 			this.app.vault,
 			this.app.fileManager,
-			this.settings
+			this.settings,
+			this
 		);
 
 		// Add ribbon icon for the plugin
@@ -116,6 +123,11 @@ export default class AIExcerptGenerator
 			}
 		);
 
+		// Add new ribbon action with scroll-text icon
+		this.addRibbonIcon("scroll-text", "AI Excerpt Commands", () => {
+			new CommandsModal(this.app, this).open();
+		});
+
 		// Add command to generate excerpt for current file
 		this.addCommand({
 			id: "generate-excerpt-current-file",
@@ -166,6 +178,15 @@ export default class AIExcerptGenerator
 			},
 		});
 
+		// Add command to open commands modal
+		this.addCommand({
+			id: "open-excerpt-commands-modal",
+			name: "Open AI Excerpt Commands",
+			callback: () => {
+				new CommandsModal(this.app, this).open();
+			},
+		});
+
 		// Add settings tab
 		this.addSettingTab(new AIExcerptSettingTab(this.app, this));
 	}
@@ -177,6 +198,7 @@ export default class AIExcerptGenerator
 		// Clean up resources
 		console.log("Unloading AI Excerpt Generator plugin");
 		this.fileProcessor = null;
+		this.statusBarItem = null;
 	}
 
 	/**
@@ -203,7 +225,8 @@ export default class AIExcerptGenerator
 		this.fileProcessor = new FileProcessor(
 			this.app.vault,
 			this.app.fileManager,
-			this.settings
+			this.settings,
+			this
 		);
 	}
 
@@ -241,5 +264,24 @@ export default class AIExcerptGenerator
 			return;
 		}
 		await this.fileProcessor.processAllFiles();
+	}
+
+	/**
+	 * Updates the status bar with current processing information
+	 * @param processed - Number of files processed
+	 * @param total - Total number of files to process
+	 */
+	updateStatusBar(processed: number, total: number): void {
+		if (this.statusBarItem) {
+			if (total > 0) {
+				this.statusBarItem.setText(
+					`AI Excerpt: ${processed}/${total} files`
+				);
+				this.statusBarItem.style.display = "block";
+			} else {
+				this.statusBarItem.setText("AI Excerpt: Ready");
+				this.statusBarItem.style.display = "block";
+			}
+		}
 	}
 }

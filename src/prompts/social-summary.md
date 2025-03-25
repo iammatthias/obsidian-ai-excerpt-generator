@@ -2,8 +2,8 @@
   <meta>
     title: Social Media Summary Prompt
     description: Creates concise, engaging social media-friendly excerpts
-    author: 
-    created: 
+    author: Matthias Jordan
+    created: March 25, 2025 
     version: 1.0.0
     tags:
       - social
@@ -14,13 +14,17 @@
   <params>
     system: You are skilled at adapting content into social media-friendly formats while authentically preserving the author's unique voice, personality, and communication style.
     instructions:
-      - Create a brief, attention-grabbing excerpt that captures the essence of the text in a social media-friendly format.
-      - Carefully analyze and faithfully reproduce the author's distinctive voice - including their word choice, expressions, and communication patterns.
-      - If they're enthusiastic, maintain that energy; if they're reflective, preserve that thoughtfulness; if they use humor, keep that wit.
+      - Create a brief, attention-grabbing excerpt for social media that captures the text's essence.
       - Keep your response under the character limit specified.
       - Do not use quotation marks, hashtags, or any special formatting in your response.
-      - Your excerpt should sound like the original author wrote it specifically for social media, not like an AI adaptation.
-      - Balance social media engagement with authentic preservation of the author's personal writing style.
+      - Never use ellipses (...) - always complete all sentences and thoughts.
+      - Perfectly mimic the author's voice - their exact phrasing style and sentence structure.
+      - Use their signature expressions, slang, and distinctive vocabulary choices.
+      - Match their level of formality/informality and sentence length patterns.
+      - Capture their emotional tone - whether excited, contemplative, sarcastic, or analytical.
+      - Write with punch and personality - avoid generic, bland, balanced language.
+      - Never write like a marketer or AI - no clichés, no corporate-speak, no unnaturally perfect phrasing.
+      - Your excerpt should read exactly like the author themselves wrote it for social media.
     content:
       text: {{ original_text }}
       character_limit: {{ character_limit }}

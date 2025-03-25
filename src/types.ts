@@ -64,4 +64,5 @@ export interface AIExcerptPlugin {
 	processFile(file: TFile, showNotices?: boolean): Promise<void>;
 	processDirectory(folder: TFolder): Promise<void>;
 	processAllFiles(): Promise<void>;
+	updateStatusBar(processed: number, total: number): void;
 }

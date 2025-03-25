@@ -56,8 +56,9 @@ export class OpenAIProvider implements AIExcerptProvider {
 			const instructions =
 				`Create a very short, informative excerpt from the provided document. ` +
 				`Keep your response under ${maxLength} characters. ` +
-				`Do not use quotation marks or any special formatting in your response. ` +
-				`Focus on capturing the key points and main theme of the document.`;
+				`Do not use quotation marks, ellipses (...), or any special formatting in your response. ` +
+				`Always provide complete sentences and thoughts, never truncated. ` +
+				`Focus on capturing the key points and main theme while matching the original author's style.`;
 
 			let excerptText = "";
 
@@ -89,7 +90,33 @@ export class OpenAIProvider implements AIExcerptProvider {
 
 			// Ensure the excerpt is within the maximum length
 			if (excerptText.length > maxLength) {
-				excerptText = excerptText.substring(0, maxLength - 3) + "...";
+				// Find the last complete sentence that fits within the limit
+				const lastPeriodIndex = excerptText.lastIndexOf(
+					".",
+					maxLength - 1
+				);
+				const lastQuestionIndex = excerptText.lastIndexOf(
+					"?",
+					maxLength - 1
+				);
+				const lastExclamationIndex = excerptText.lastIndexOf(
+					"!",
+					maxLength - 1
+				);
+
+				// Find the latest ending punctuation within the limit
+				const endIndex = Math.max(
+					lastPeriodIndex > 0 ? lastPeriodIndex : 0,
+					lastQuestionIndex > 0 ? lastQuestionIndex : 0,
+					lastExclamationIndex > 0 ? lastExclamationIndex : 0
+				);
+
+				// If we found a sentence ending, use it; otherwise trim at max length
+				if (endIndex > 0) {
+					excerptText = excerptText.substring(0, endIndex + 1);
+				} else {
+					excerptText = excerptText.substring(0, maxLength);
+				}
 			}
 
 			return excerptText;
@@ -141,7 +168,9 @@ export class OpenAIProvider implements AIExcerptProvider {
 		// Prepare user prompt with instructions and content
 		const userPrompt =
 			`Generate a concise excerpt (maximum ${maxLength} characters) that captures the essence of this document. ` +
-			`Focus on the main points and be extremely concise. ` +
+			`Focus on the main points while matching the author's exact writing style and voice. ` +
+			`Never use ellipses (...) - always use complete sentences and thoughts. ` +
+			`Avoid generic AI-like phrasing - use the author's own expressions, turns of phrase, and language patterns. ` +
 			`The excerpt will be used as a summary in an index or search results.\n\n` +
 			`Document:\n${content}`;
 
@@ -159,7 +188,7 @@ export class OpenAIProvider implements AIExcerptProvider {
 				},
 			],
 			max_tokens: 100,
-			temperature: 0.2, // Low temperature for more consistent results
+			temperature: 0.3, // Slightly higher temperature for more natural language
 		});
 
 		// Process and validate response
