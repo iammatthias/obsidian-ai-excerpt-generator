@@ -5,7 +5,6 @@
 	"minAppVersion": "0.15.0",
 	"description": "Automatically generates short excerpt summaries for notes using Claude AI",
 	"author": "AI Excerpt Generator",
-	"authorUrl": "https://github.com/yourusername/obsidian-ai-excerpt-generator",
-	"fundingUrl": "",
+	"authorUrl": "https://github.com/iammatthias/obsidian-ai-excerpt-generator",
 	"isDesktopOnly": false
 }
