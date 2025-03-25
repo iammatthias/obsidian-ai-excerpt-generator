@@ -145,7 +145,7 @@ src/
 
 ## License
 
-This project is available under the Zero-Clause BSD (0BSD) License - see the LICENSE file for details.
+This project is available under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Support
 
