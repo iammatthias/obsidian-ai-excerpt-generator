@@ -5,6 +5,8 @@
 	"minAppVersion": "0.15.0",
 	"description": "Create smart note excerpts with AI in your frontmatter",
 	"author": "AI Excerpt Generator",
-	"authorUrl": "https://github.com/iammatthias/obsidian-ai-excerpt-generator",
-	"isDesktopOnly": false
+	"authorUrl": "https://iammatthias.com",
+	"fundingUrl": "https://github.com/sponsors/iammatthias",
+	"isDesktopOnly": false,
+	"repo": "iammatthias/obsidian-ai-excerpt-generator"
 }
